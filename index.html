@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <title>SHEFA · שֶׁפַע · Predictive Runway Engine · 1000PEPEUSDT</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<script>
+(function(){
+  try{if("scrollRestoration" in history)history.scrollRestoration="manual";}catch(e){}
+  try{window.scrollTo(0,0);document.documentElement.scrollTop=0;document.body.scrollTop=0;}catch(e){}
+})();
+</script>
 <style>
 :root{--bg:#0a0d12;--card:#10151d;--edge:#1e2733;--edgeS:#273244;--ink:#e8eef6;--dim:#8fa1b8;
 --gold:#e3b34c;--good:#3ddc97;--bad:#ff6b7a;--pillbg:#141b25;--warn:#f0a35e}
@@ -42,6 +48,26 @@ button:hover{border-color:var(--gold)}
 #journal{font:11px/1.5 Consolas,monospace;color:var(--dim);max-height:170px;overflow-y:auto;white-space:pre-wrap}
 .footnote{font-size:10.5px;color:var(--dim);margin-top:10px;line-height:1.5;border-top:1px solid var(--edge);padding-top:8px}
 .statusRow{display:flex;gap:6px;flex-wrap:wrap;align-items:center;justify-content:center;margin-top:6px}
+
+html{scroll-behavior:auto;overscroll-behavior-y:auto}
+.grid>div{min-width:0}
+.ledgerHead{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.ledgerHead span:first-child{min-width:0}
+.ledgerToggle{width:auto;min-width:74px;padding:3px 9px;font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--gold);border-color:var(--edgeS)}
+.ledgerToggle:hover{border-color:var(--gold);color:var(--ink)}
+.ledgerShell{display:block}
+.runwayCard[data-folded="true"] .ledgerShell{display:none}
+.runwayCard[data-folded="true"]{padding-bottom:10px}
+.sideStack{min-width:0}
+@media(min-width:1080px){
+  .grid{align-items:stretch}
+  .sideStack{display:flex;flex-direction:column;gap:12px;height:100%;min-height:100%}
+  .sideStack>.card{margin-top:0!important}
+  .journalCard{flex:1 1 auto;min-height:260px;display:flex;flex-direction:column}
+  .journalCard #journal{flex:1 1 auto;max-height:none;min-height:220px}
+  .todayCard{flex:0 0 auto}
+}
+
 </style>
 </head>
 <body>
@@ -58,15 +84,20 @@ button:hover{border-color:var(--gold)}
 
 <div class="grid">
   <div><!-- LEFT: completed runways -->
-    <div class="card">
-      <div class="cardTitle"><span class="he2">סֵפֶר</span>Completed Runways · clean ledger</div>
-      <div id="ledger">No completed runways yet.</div>
-      <div style="margin-top:8px">
-        <button onclick="shefaExport('json')">📥 JSON</button>
-        <button onclick="shefaExport('txt')">📄 TXT</button>
-        <button onclick="shefaClear()" style="float:right;opacity:.7">clear</button>
+    <div class="card runwayCard" id="completedRunwayCard" data-folded="false">
+      <div class="cardTitle ledgerHead">
+        <span><span class="he2">סֵפֶר</span>Completed Runways · clean ledger</span>
+        <button class="ledgerToggle" id="ledgerToggle" type="button" aria-expanded="true" aria-controls="completedRunwayBody" onclick="shefaToggleLedger()">SEAL</button>
       </div>
-      <div class="footnote">Keyed by flip-time — structurally immune to the duplicate-runway artifact of rolling-buffer re-parses.</div>
+      <div class="ledgerShell" id="completedRunwayBody">
+        <div id="ledger">No completed runways yet.</div>
+        <div style="margin-top:8px">
+          <button onclick="shefaExport('json')">📥 JSON</button>
+          <button onclick="shefaExport('txt')">📄 TXT</button>
+          <button onclick="shefaClear()" style="float:right;opacity:.7">clear</button>
+        </div>
+        <div class="footnote">Keyed by flip-time — structurally immune to the duplicate-runway artifact of rolling-buffer re-parses.</div>
+      </div>
     </div>
   </div>
 
@@ -96,12 +127,12 @@ button:hover{border-color:var(--gold)}
     </div>
   </div>
 
-  <div><!-- RIGHT: journal -->
-    <div class="card">
+  <div class="sideStack"><!-- RIGHT: journal -->
+    <div class="card journalCard">
       <div class="cardTitle"><span class="he2">יוֹמָן</span>Journal</div>
       <div id="journal"></div>
     </div>
-    <div class="card" style="margin-top:12px">
+    <div class="card todayCard" style="margin-top:12px">
       <div class="cardTitle">Today</div>
       <div id="daySummary" class="kv"><span>—</span></div>
     </div>
@@ -125,7 +156,7 @@ const SHEFA_MEMORY_SPRINGS=[
 ];
 /* Long-memory spring remains paged because the regime gate needs about 30 days. */
 const SHEFA_LONG_MEMORY_SPRING="https://fapi.binance.com/fapi/v1/klines?symbol="+SHEFA_MARKET+"&interval=1m";
-const K_CANDLES="SHEFA_CANDLES_V1", K_LEDGER="SHEFA_LEDGER_V2";
+const K_CANDLES="SHEFA_CANDLES_V1", K_LEDGER="SHEFA_LEDGER_V2", K_LEDGER_FOLD="SHEFA_LEDGER_FOLD_V1";
 const MODEL=JSON.parse(document.getElementById("shefaModel").textContent);
 const FRAC=MODEL.frac||350/42511.5;
 
@@ -141,6 +172,28 @@ const S={
 
 const q=id=>document.getElementById(id);
 const set=(id,v)=>{const e=q(id); if(e)e.textContent=v};
+function shefaReturnToSource(reason){
+  try{if("scrollRestoration" in history)history.scrollRestoration="manual";}catch(e){}
+  const rise=()=>{try{window.scrollTo({top:0,left:0,behavior:"auto"});}catch(e){try{window.scrollTo(0,0);}catch(_){}}
+    try{document.documentElement.scrollTop=0;document.body.scrollTop=0;}catch(e){}
+  };
+  rise();
+  if(typeof requestAnimationFrame==="function")requestAnimationFrame(rise);
+  setTimeout(rise,0);setTimeout(rise,80);setTimeout(rise,240);setTimeout(rise,700);
+}
+function shefaSetLedgerFold(folded){
+  const card=q("completedRunwayCard"),btn=q("ledgerToggle"),body=q("completedRunwayBody");
+  if(card)card.dataset.folded=folded?"true":"false";
+  if(btn){btn.textContent=folded?"UNSEAL":"SEAL";btn.setAttribute("aria-expanded",folded?"false":"true")}
+  if(body)body.setAttribute("aria-hidden",folded?"true":"false");
+}
+function shefaToggleLedger(){
+  const card=q("completedRunwayCard");
+  const folded=!(card&&card.dataset.folded==="true");
+  shefaSetLedgerFold(folded);
+  try{SHEFA_MEMORY.setItem(K_LEDGER_FOLD,folded?"1":"0")}catch(e){}
+}
+window.shefaToggleLedger=shefaToggleLedger;
 function log(msg){const e=q("journal"); if(!e)return; const t=new Date().toLocaleTimeString("en-GB",{hour12:false}); e.textContent=("["+t+"] "+msg+"\n"+e.textContent).slice(0,6000)}
 const fmtPx=p=>p?Number(p).toFixed(7):"—";
 const fmtHM=ms=>new Date(ms).toLocaleTimeString("en-GB",{hour12:false,hour:"2-digit",minute:"2-digit"});
@@ -159,6 +212,7 @@ function saveLedger(){try{SHEFA_MEMORY.setItem(K_LEDGER,JSON.stringify(S.ledger.
 function load(){
   try{S.candles=(JSON.parse(SHEFA_MEMORY.getItem(K_CANDLES)||"[]")||[]).filter(c=>c&&c.t&&c.c>0).sort((a,b)=>a.t-b.t).slice(-MAX_CANDLES);}catch(e){S.candles=[]}
   try{S.ledger=JSON.parse(SHEFA_MEMORY.getItem(K_LEDGER)||"[]")||[];}catch(e){S.ledger=[]}
+  try{shefaSetLedgerFold(SHEFA_MEMORY.getItem(K_LEDGER_FOLD)==="1")}catch(e){shefaSetLedgerFold(false)}
   if(S.candles.length){S.price=+S.candles[S.candles.length-1].c||null;log("Shefa memory restored · "+S.candles.length+" candles · "+S.ledger.length+" sealed runways")}
   if(SHEFA_MEMORY.volatile)log("Shefa memory is temporarily volatile in this browser context")
 }
@@ -354,15 +408,20 @@ setInterval(()=>{renderLive();onClosedBar()},15000);
 
 document.addEventListener("visibilitychange",()=>{
   if(document.visibilityState==="visible"){
+    shefaReturnToSource("foreground-return");
     log("Shefa returned to the foreground · testing continuity");renderLive();
     if(!S.lastTickAt||Date.now()-S.lastTickAt>10000){shefaOpenLivingCurrent("foreground-return");shefaOpenReserveCurrent("foreground-return");shefaDrawMemory()}
   }
 });
 window.addEventListener("pageshow",()=>{
+  shefaReturnToSource("page-awakening");
   const age=S.lastTickAt?Date.now()-S.lastTickAt:Date.now()-S.startedAt;
   if(age>10000){shefaOpenLivingCurrent("page-awakening");shefaDrawMemory()}
 });
-window.addEventListener("online",()=>{log("Shefa network path returned · reopening living current");shefaOpenLivingCurrent("network-return");shefaDrawMemory()});
+window.addEventListener("load",()=>shefaReturnToSource("page-loaded"));
+window.addEventListener("focus",()=>shefaReturnToSource("window-return"));
+window.addEventListener("beforeunload",()=>{try{window.scrollTo(0,0);document.documentElement.scrollTop=0;document.body.scrollTop=0}catch(e){}});
+window.addEventListener("online",()=>{shefaReturnToSource("network-return");log("Shefa network path returned · reopening living current");shefaOpenLivingCurrent("network-return");shefaDrawMemory()});
 
 /* ============ INVARIANT zigzag: reversal budget = FRAC x extreme (scale-free) ============ */
 function zig(closed){
@@ -613,6 +672,7 @@ function shefaClear(){if(confirm("Clear the Shefa runway ledger?")){S.ledger=[];
 window.shefaExport=shefaExport;window.shefaClear=shefaClear;
 
 /* ============ boot ============ */
+shefaReturnToSource("first-awakening");
 load(); renderLive(); shefaDrawMemory(); shefaOpenLivingCurrent("first-awakening"); gateBootstrap();
 const SHEFA_FEATURE_COUNT=((MODEL.oracles&&MODEL.oracles.exodus&&MODEL.oracles.exodus.cols)||MODEL.cols||[]).length;
 log("SHEFA II awakening · invariant+expansion model ("+MODEL.trainedOn+") · "+SHEFA_FEATURE_COUNT+" scale-free features · EXODUS/HORIZON/SURGE oracles · continuity sentinel armed");
