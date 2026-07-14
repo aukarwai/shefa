@@ -85,7 +85,7 @@ body{padding:max(14px,env(safe-area-inset-top)) 14px calc(10px + env(safe-area-i
   <div class="card" id="stripCard" style="grid-column:1/-1"><!-- COMMAND STRIP -->
     <div class="stripTop">
       <div><div class="stateWord stWarm" id="stWord">WARMUP</div><div class="small" id="stSince">gathering field…</div></div>
-      <div style="text-align:right"><div class="stripPx" id="stPx">—</div><div class="small">live · tick feed</div></div>
+      <div style="text-align:right"><div class="stripPx" id="stPx">—</div><div class="small">live · price current</div></div>
     </div>
     <div class="lbl2">Runway life · extraction <span id="lifeLbl">—</span></div>
     <div class="lifebar"><div class="lifefill" id="lifeF" style="width:0%"></div></div>
@@ -160,14 +160,14 @@ body{padding:max(14px,env(safe-area-inset-top)) 14px calc(10px + env(safe-area-i
 const SHEFA_MARKET="1000PEPEUSDT", SHEFA_PAIR="1000PEPE-USDT", TICK_MULT=1e7, MAX_CANDLES=4320;
 const SHEFA_MEMORY_SPRING="https://fapi.binance.com/fapi/v1/klines?symbol="+SHEFA_MARKET+"&interval=1m&limit=1440";
 const SHEFA_LIVING_CURRENT="wss://open-api-swap.bingx.com/swap-market";
-const SHEFA_RESERVE_CURRENT="wss://fstream.binance.com/stream?streams="+SHEFA_MARKET.toLowerCase()+"@aggTrade/"+SHEFA_MARKET.toLowerCase()+"@kline_1m";
+const SHEFA_RESERVE_CURRENT="wss://fstream.binance.com/stream?streams="+SHEFA_MARKET.toLowerCase()+"@ticker/"+SHEFA_MARKET.toLowerCase()+"@kline_1m";
 const SYMBOL=SHEFA_MARKET;
 const K_CANDLES="SHEFA_CANDLES_V1", K_LEDGER="SHEFA_LEDGER_V2"; // V2: invariant (%) runway semantics
 const MODEL=JSON.parse(document.getElementById("shefaModel").textContent);
 const FRAC=MODEL.frac||350/42511.5;   // reversal budget as fraction of the extreme (0.823% = 2026-equivalent of 350t)
 
 const S={candles:[],ledger:[],ws:null,price:null,prevPrice:null,lastTickAt:0,lastClosedT:0,oracle:null,
-         fireHist:[],lastLiving:null,state:"WARMUP",stateSince:Date.now()};
+         priceBreath:"",fireHist:[],lastLiving:null,state:"WARMUP",stateSince:Date.now()};
 
 const q=id=>document.getElementById(id);
 const set=(id,v)=>{const e=q(id); if(e)e.textContent=v};
@@ -229,18 +229,54 @@ function shefaAnswerPulse(ws,msg){
   }catch(e){}
   return false;
 }
-function shefaFindPrice(node){
-  if(!node)return NaN;
-  if(Array.isArray(node)){for(const x of node){const p=shefaFindPrice(x); if(p>0)return p} return NaN}
-  if(typeof node==="number")return node>0?node:NaN;
-  if(typeof node!=="object")return NaN;
-  for(const k of ["lastPrice","price","p","c","close","last","markPrice","indexPrice"]){
-    const v=+node[k]; if(v>0)return v;
+function shefaPickNumber(node,keys){
+  if(!node||typeof node!=="object")return NaN;
+  for(const k of keys){
+    const v=node[k];
+    if(v!==undefined&&v!==null&&v!==""){const n=+v; if(n>0)return n}
   }
-  for(const k of ["data","tick","T","k"]){const p=shefaFindPrice(node[k]); if(p>0)return p}
   return NaN;
 }
-function shefaAbsorbTick(p,ts){
+function shefaFindPrice(packet){
+  if(!packet)return NaN;
+  if(Array.isArray(packet)){for(const x of packet){const p=shefaFindPrice(x); if(p>0)return p} return NaN}
+  if(typeof packet==="number")return packet>0?packet:NaN;
+  if(typeof packet!=="object")return NaN;
+
+  const stream=String(packet.stream||packet.dataType||"");
+  const data=packet.data&&typeof packet.data==="object"?packet.data:packet;
+  const event=String(data.e||packet.e||"");
+
+  // Kline/candle packets: close price is the live minute price.
+  const kline=data.K||data.k||packet.K||packet.k;
+  if(kline&&typeof kline==="object"){
+    const p=shefaPickNumber(kline,["c","close","lastPrice","price"]);
+    if(p>0){S.priceBreath="minute close";return p}
+  }
+
+  // Ticker packets: never treat bare `p` as price because it is commonly price-change.
+  if(stream.includes("@ticker")||/ticker/i.test(event)||data.lastPrice!==undefined||data.priceChange!==undefined){
+    const p=shefaPickNumber(data,["lastPrice","c","close","price","markPrice","indexPrice","bidPrice","askPrice"]);
+    if(p>0){S.priceBreath="price current";return p}
+    return NaN;
+  }
+
+  // Trade packets: here `p` is the actual trade price.
+  if(stream.includes("@trade")||stream.includes("aggTrade")||/trade/i.test(event)){
+    const p=shefaPickNumber(data,["p","price","lastPrice","c"]);
+    if(p>0){S.priceBreath="trade breath";return p}
+  }
+
+  // Generic fallback: prefer current-price names; only use `p` last and only if it is plausible.
+  let p=shefaPickNumber(data,["lastPrice","price","close","c","last","markPrice","indexPrice"]);
+  if(p>0){S.priceBreath="price current";return p}
+  p=shefaPickNumber(data,["p"]);
+  if(p>0&&(!S.price||Math.abs(p-S.price)/S.price<0.15)){S.priceBreath="price breath";return p}
+
+  for(const key of ["data","tick","T"]){const v=packet[key]; if(v&&v!==packet){p=shefaFindPrice(v); if(p>0)return p}}
+  return NaN;
+}
+function shefaAbsorbPriceBreath(p,ts){
   if(!(p>0))return;
   const t=Math.floor((ts||Date.now())/60000)*60000;
   S.prevPrice=S.price; S.price=p; S.lastTickAt=Date.now();
@@ -265,7 +301,7 @@ function shefaOpenLivingCurrent(){
   ws.onopen=()=>{
     shefaBadge("SHEFA SEEKING","warn");
     try{ws.send(JSON.stringify({id:"shefa-"+Date.now(),reqType:"sub",dataType:SHEFA_PAIR+"@ticker"}))}catch(e){}
-    log("Living current opened · awaiting first price breath");
+    log("Living current opened · awaiting first price current");
   };
   ws.onmessage=async ev=>{
     let text=""; try{text=await shefaReveal(ev)}catch(e){return}
@@ -273,7 +309,7 @@ function shefaOpenLivingCurrent(){
     let msg; try{msg=JSON.parse(text)}catch(e){return}
     if(shefaAnswerPulse(ws,msg))return;
     const p=shefaFindPrice(msg);
-    if(p>0){shefaBadge("SHEFA LIVE","good"); shefaAbsorbTick(p,Date.now())}
+    if(p>0){shefaBadge("SHEFA LIVE","good"); shefaAbsorbPriceBreath(p,Date.now())}
   };
   ws.onerror=()=>log("Living current flicker · reserve standing by");
   ws.onclose=()=>{if(S.ws===ws&&Date.now()-S.lastTickAt>12000){shefaBadge("SHEFA SEEKING","warn");setTimeout(shefaOpenReserveCurrent,1500)}};
@@ -289,9 +325,14 @@ function shefaOpenReserveCurrent(){
   ws.onmessage=ev=>{
     let d; try{d=JSON.parse(ev.data)}catch(e){return}
     const x=d&&d.data?d.data:d;
-    if(x&&x.e==="aggTrade"){const p=+x.p; if(p>0)shefaAbsorbTick(p,+x.T||Date.now()); return}
+    if(x&&(x.e==="24hrTicker"||x.c!==undefined||x.lastPrice!==undefined)){
+      const p=shefaFindPrice({stream:d.stream||"",data:x});
+      if(p>0)shefaAbsorbPriceBreath(p,+x.E||Date.now());
+      if(!(x&&x.k))return;
+    }
     const k=x&&x.k; if(!k)return;
-    S.prevPrice=S.price; S.price=+k.c; S.lastTickAt=Date.now();
+    const p=+k.c; if(!(p>0))return;
+    S.prevPrice=S.price; S.price=p; S.lastTickAt=Date.now(); S.priceBreath="minute close";
     const bar={t:+k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,v:+k.v,n:+k.n,tb:+k.V,x:k.x?1:0};
     const last=S.candles[S.candles.length-1];
     if(last&&last.t===bar.t)S.candles[S.candles.length-1]=bar; else S.candles.push(bar);
